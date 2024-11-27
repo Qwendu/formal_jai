@@ -1,7 +1,6 @@
 get_plugin :: () -> *Metaprogram_Plugin
 {
 	p := New(CheckValid);
-	
 	return p;
 }
 
@@ -60,20 +59,37 @@ _message :: (p : *Metaprogram_Plugin, m : *Message)
 					n += 1;
 					n_observed_values := expr.num_return_values_received;
 					success_bool_index := index_of_success_bool(header);
-					if 0 <= success_bool_index && success_bool_index >= n_observed_values
-					{
-						compiler_report("Function call does not receive a success : bool", make_location(expr), .ERROR); // this is basically must
-						compiler_report("Function call has success : bool", make_location(expr),.INFO);
-						compiler_report("Function definition", make_location(header), .INFO);
-					}
-					track_declarations_in_body
 					// keep track of the other return values and if they are used
 					// if they are used, it needs to be statically proven that success == true
+					success_bool_decl : *Code_Declaration;
+					variables_to_track : [] *Code_Declaration;
+					block : *Code_Block;
+					track_variable_use(block, variables_to_track, success_bool_decl);
 				}
 			}
 			N_Functions_Seen += n;
 		}
 	}
+}
+
+Success_State :: enum
+{
+	// This is the abstract domain
+	UNINIT :: 0; // BOT
+
+	TRUE;
+	FALSE;
+
+	ANY;  // TOP
+}
+
+track_variable_use :: (block : *Code_Block, vars : [] *Code_Declaration, success_bool : *Code_Declaration)
+{
+	state_before_statements := NewArray(block.statements.count, Success_State);
+	for * state_before_statements  it.* = .UNINIT;
+
+	// If use any v in vars while Success_State is UNINIT || FALSE || ANY, error
+	
 }
 
 type_signature :: (t : *Type_Info) -> string
@@ -218,6 +234,7 @@ function_calls :: (block : *Code_Block, code : Code, flags : For_Flags) #expand
 		case .ENUM;
 		case .PUSH_CONTEXT;
 		case .DIRECTIVE_LIBRARY;
+		case .DIRECTIVE_BYTES;
 
 		}
 	}
