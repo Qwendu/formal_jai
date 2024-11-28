@@ -42,29 +42,29 @@ _message :: (p : *Metaprogram_Plugin, m : *Message)
 				if is_success_bool(decl)
 				{
 					table_add(*procedures_that_have_success_bool, it.expression.name, it.expression);
-					//compiler_report(tprint("% has success bool", it.expression.name), make_location(it.expression), .INFO);
+					//compiler_report(tprint("% has success : bool", it.expression.name), make_location(it.expression), .INFO);
 					continue it;
 				}
 			}
 		}
-		for tc.procedure_bodies
+		for tc.procedure_bodies  if it.expression.header.name == "main"
 		{
 			n := 0;
-			for :function_calls expr, expr_index : it.expression.block
+			proc_calls :: #bake_arguments(node_iter(example_node = Code_Procedure_Call.{}));
+			for :proc_calls  expr, expr_index : it.expression.block
 			{
 				header := get_procedure_header_if_compile_time_known(expr);
 				if header == null  continue expr;
-				if table_find_pointer(*procedures_that_have_success_bool, header.name )
+				if table_find_pointer(*procedures_that_have_success_bool, header.name ) != null
 				{
 					n += 1;
-					n_observed_values := expr.num_return_values_received;
-					success_bool_index := index_of_success_bool(header);
-					// keep track of the other return values and if they are used
-					// if they are used, it needs to be statically proven that success == true
-					success_bool_decl : *Code_Declaration;
-					variables_to_track : [] *Code_Declaration;
-					block : *Code_Block;
-					track_variable_use(block, variables_to_track, success_bool_decl);
+					//n_observed_values := expr.num_return_values_received;
+					//success_bool_index := index_of_success_bool(header);
+					//keep track of the other return values and if they are used
+					//if they are used, it needs to be statically proven that success == true
+					success_bool_decl := stack_element.in_declaration;
+					block : *Code_Block = stack_element.surrounding_block;
+					abstract_interpret(block, .[success_bool_decl]);
 				}
 			}
 			N_Functions_Seen += n;
@@ -72,25 +72,155 @@ _message :: (p : *Metaprogram_Plugin, m : *Message)
 	}
 }
 
-Success_State :: enum
+
+Bool_Value_Abstract_Domain :: enum
 {
-	// This is the abstract domain
-	UNINIT :: 0; // BOT
+	BOT   :: 0x00;
+	TRUE  :: 0x01;
+	FALSE :: 0x02;
+	TOP   :: 0x03;
+};
 
-	TRUE;
-	FALSE;
-
-	ANY;  // TOP
+join :: (a : Bool_Value_Abstract_Domain, b : Bool_Value_Abstract_Domain) -> Bool_Value_Abstract_Domain
+{
+	r := a & b;
+	return r;
 }
 
-track_variable_use :: (block : *Code_Block, vars : [] *Code_Declaration, success_bool : *Code_Declaration)
+meet :: (a : Bool_Value_Abstract_Domain, b : Bool_Value_Abstract_Domain) -> Bool_Value_Abstract_Domain
 {
-	state_before_statements := NewArray(block.statements.count, Success_State);
-	for * state_before_statements  it.* = .UNINIT;
+	r := a | b;
+	return r;
+}
 
-	// If use any v in vars while Success_State is UNINIT || FALSE || ANY, error
+#if false #run {
+	for a : enum_values_as_enum(Bool_Value_Abstract_Domain)
+	{
+		for b : enum_values_as_enum(Bool_Value_Abstract_Domain)
+		{
+			log("meet(%1,%2) = %3 join(%1,%2) = %4", a,b, meet(a,b), join(a,b));
+		}
+	}
+}
+
+statement_transform :: (variable_store_before : *Table(*Code_Declaration, Bool_Value_Abstract_Domain), statement : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
+{
+	// What effects statement has on the variables in store
+	return true;
+}
+
+
+condition_transform :: (variable_store_before : *Table(*Code_Declaration, Bool_Value_Abstract_Domain), condition : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
+{
+	return true;
+}
+
+
+abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declaration)
+{
+
+	// rewrite this using build CFG
+	Store :: Table(*Code_Declaration, Bool_Value_Abstract_Domain);
+	stores_per_block : Table(*Code_Block, struct {stores : [] Store; parent : *Code_Block;});
+	for :#bake_arguments(node_iter(example_node = Code_Block.{})) block
+	{
+		stores := NewArray(it.statements.count + 1, Store);
+		for * stores 
+		{
+			init(it);
+			for var : variables_to_track  table_add(it, var, .BOT);
+		}
+
+		table_add(*stores_per_block, it, .{stores, stack_element.surrounding_block});
+		log("New Block %", it);
+	}
 	
+	for it, blk: stores_per_block
+	{
+		log("Block % has % statements", blk, blk.statements.count);
+		log("has % stores", it.stores.count);
+		for statement, statement_index : blk.statements
+		{
+			log("Store %", *it.stores[statement_index]);
+			for val, var : it.stores[statement_index]  log("% -> %", var, val);
+		}
+	}
+	
+	queue : [..] struct
+	{
+		block     : *Code_Block;
+		statement : int;
+	};
+	array_add(*queue, .{block, 0});
+	while queue.count > 0
+	{
+		current := pop(*queue);
+		block_info := table_find_pointer(*stores_per_block, current.block);
+		block_stores := block_info.stores;
+		node := current.block.statements[current.statement];
+		state_before := *(block_stores[current.statement + 0]);
+
+		if node.kind == 
+		{
+		case .IF;
+			node_if := cast(*Code_If)node;
+			compiler_report("IF", make_location(node), .INFO);
+			then_block_stores := table_find_pointer(*stores_per_block, node_if.then_block);
+			else_block_stores := table_find_pointer(*stores_per_block, node_if.else_block);
+			if then_block_stores && condition_transform(state_before, node_if.condition, *(then_block_stores.stores[0]))
+			{
+				array_add(*queue, .{node_if.then_block, 0});
+				compiler_report("adding to queue", make_location(node), .INFO);
+			}
+			if else_block_stores && condition_transform(state_before, node_if.condition, *(else_block_stores.stores[0]))
+			{
+				array_add(*queue, .{node_if.else_block, 0});
+				compiler_report("adding to queue", make_location(node), .INFO);
+			}
+		case;
+			state_after  := *(block_stores[current.statement + 1]);
+			compiler_report("statement_transform", make_location(node), .INFO);
+			changed := statement_transform(state_before, node, state_after);
+			if changed
+			{
+				next_index := current.statement + 1;
+				if next_index < current.block.statements.count
+				{
+					
+					next := current.block.statements[next_index];
+					//compiler_report("adding statement to queue", make_location(next), .INFO);
+					array_add(*queue, .{current.block, next_index});
+				}else{
+					compiler_report("at the end of a block", make_location(node), .INFO);
+					if current.block != block
+					{
+						parent := block_info.parent;
+						//compiler_report("Parent of ", make_location(current.block), .INFO);
+						assert(parent != null);
+						index_of_owning := parent.statements.count;
+						for stmt, stmt_index : parent.statements  if stmt == current.block.owning_statement 
+						{
+							index_of_owning = stmt_index;
+							break;
+						}
+						assert(0 <= index_of_owning  && index_of_owning < parent.statements.count);
+
+						next_in_parent := index_of_owning + 1;
+						if next_in_parent < parent.statements.count
+						{
+							array_add(*queue, .{parent, index_of_owning + 1});
+						}
+						// TODO: Merge the states
+					}
+				}
+			}
+		}
+	}
 }
+
+
+
+
 
 type_signature :: (t : *Type_Info) -> string
 {
@@ -118,6 +248,7 @@ type_signature :: (t : *Type_Info) -> string
 
 get_procedure_header_if_compile_time_known :: (call : *Code_Procedure_Call) -> *Code_Procedure_Header
 {
+	//compiler_report("uh", make_location(call), .INFO);
 	if call.resolved_procedure_expression != null && call.resolved_procedure_expression.kind == .PROCEDURE_HEADER
 	{
 		return cast(*Code_Procedure_Header)call.resolved_procedure_expression;
@@ -138,80 +269,90 @@ _fin :: (p : *Metaprogram_Plugin)
 	log("Seen % Function Calls that have success : bool", N_Functions_Seen);
 }
 
-function_calls :: (block : *Code_Block, code : Code, flags : For_Flags) #expand
+node_iter :: (block : *Code_Block, code : Code, flags : For_Flags, $example_node : $T/interface Code_Node) #expand
 {
 	// Here I want to also keep track of the Code_Block of the expression
 	// Such that I can then iterate over other expressions in the block
 	assert(block.block_type == .IMPERATIVE);
-	`it : *Code_Procedure_Call;
+
+	Stack_Element :: struct
+	{
+		node              : *Code_Node;
+		surrounding_block : *Code_Block;
+		in_declaration    : *Code_Declaration;
+	};
+	`it : *T;
 	`it_index : int;
-	stack : [..] *Code_Node;
-	array_add(*stack, block);
+	`stack_element : Stack_Element;
+	stack : [..] Stack_Element;
+	array_add(*stack, .{block, block, null});
 	while stack.count > 0
 	{
-		node := pop(*stack);
-		if node.kind == .PROCEDURE_CALL
+		stack_element = pop(*stack);
+		node := stack_element.node;
+		if node.kind == example_node.kind
 		{
 			defer it_index += 1;
-			it = cast(*Code_Procedure_Call)node;
+			it = cast(*type_of(example_node))node;
 			#insert code;
 		}
 		if node.kind ==
 		{
 		case .IF; 
 			node_if := cast(*Code_If)node;
-			if node_if.then_block  array_add(*stack, node_if.then_block);
-			if node_if.else_block  array_add(*stack, node_if.else_block);
-			if node_if.condition   array_add(*stack, node_if.condition);
+			if node_if.then_block  array_add(*stack, .{node_if.then_block, stack_element.surrounding_block, stack_element.in_declaration});
+			if node_if.else_block  array_add(*stack, .{node_if.else_block, stack_element.surrounding_block, stack_element.in_declaration});
+			if node_if.condition   array_add(*stack, .{node_if.condition , stack_element.surrounding_block, stack_element.in_declaration});
 		case .WHILE;
 			node_while := cast(*Code_While)node;
-			array_add(*stack, node_while.condition);
-			array_add(*stack, node_while.block);
+			array_add(*stack, .{node_while.condition, stack_element.surrounding_block, stack_element.in_declaration});
+			array_add(*stack, .{node_while.block    , stack_element.surrounding_block, stack_element.in_declaration});
 		case .BLOCK;
 			node_block := cast(*Code_Block)node;
-			for statement : node_block.statements  array_add(*stack, statement);
+			for statement : node_block.statements  array_add(*stack, .{statement, node_block, null});
 		case .BINARY_OPERATOR;
 			node_bin := cast(*Code_Binary_Operator)node;
-			array_add(*stack, node_bin.left, node_bin.right);
+			array_add(*stack
+				, .{node_bin.left , stack_element.surrounding_block, stack_element.in_declaration}
+				, .{node_bin.right, stack_element.surrounding_block, stack_element.in_declaration}
+			);
 		case .UNARY_OPERATOR;
 			node_bin := cast(*Code_Unary_Operator)node;
-			array_add(*stack, node_bin.subexpression);
+			array_add(*stack, .{node_bin.subexpression, stack_element.surrounding_block, stack_element.in_declaration});
 		case .RETURN;
 			node_return := cast(*Code_Return)node;
-			array_add(*stack, ..node_return.arguments_sorted);
+			for node_return.arguments_sorted
+			{
+				array_add(*stack, .{it, stack_element.surrounding_block, null});
+			}
 		case .FOR;
 			node_for := cast(*Code_For)node;
-			array_add(*stack, node_for.iteration_expression);
-			array_add(*stack, node_for.block);
-		case .CAST;
-			node_cast := cast(*Code_Cast)node;
-			array_add(*stack, node_cast.expression);
+			array_add(*stack, .{node_for.iteration_expression, stack_element.surrounding_block, stack_element.in_declaration});
+			array_add(*stack, .{node_for.block, stack_element.surrounding_block, stack_element.in_declaration});
+
+		case .COMPOUND_DECLARATION;
+
+			node_compound_declaration := cast(*Code_Compound_Declaration)node;
+			//for node_compound_declaration.comma_separated_assignment.arguments
+			//{
+			//	compiler_report(tprint("%", it.node.kind), make_location(it.node), .INFO); // Seem to be IDENT
+			//}
+			array_add(*stack, .{node_compound_declaration.declaration_properties.expression, stack_element.surrounding_block, node_compound_declaration.declaration_properties});
+
 		case .DECLARATION;
 			node_declaration := cast(*Code_Declaration)node;
-			if node_declaration.expression  array_add(*stack, node_declaration.expression);
-
-		case .USING;
-			node_using := cast(*Code_Using)node;
-			array_add(*stack, node_using.expression);
-		case .MAKE_VARARGS;
-			node_make_varargs := cast(*Code_Make_Varargs)node;
-			array_add(*stack, ..node_make_varargs.expressions);
-		case .DIRECTIVE_CODE;
-			node_directive_code := cast(*Code_Directive_Code)node;
-			array_add(*stack, node_directive_code.expression);
-		case .PROCEDURE_CALL;
-			node_procedure_call := cast(*Code_Procedure_Call)node;
-			array_add(*stack, ..node_procedure_call.arguments_sorted);
-			if node_procedure_call.macro_expansion_block  array_add(*stack, node_procedure_call.macro_expansion_block);
-		case .DEFER;
-			node_defer := cast(*Code_Defer)node;
-			array_add(*stack, node_defer.block);
+			if node_declaration.expression  array_add(*stack, .{node_declaration.expression, stack_element.surrounding_block, node_declaration});
 		case;
 			log("[Warning] Unhandled Code_Node.kind == % when iterating over all function call sites", node.kind);
 		// We ignore these for now
+		case .DEFER;
+		case .PROCEDURE_CALL;
+		case .DIRECTIVE_CODE;
+		case .MAKE_VARARGS;
+		case .CAST;
 		case .EXTRACT;
 		case .DIRECTIVE_INSERT;
-		case .COMPOUND_DECLARATION;
+
 		case .DIRECTIVE_BAKE;
 		case .TYPE_DEFINITION;
 		case .EXPRESSION_QUERY;
@@ -235,6 +376,7 @@ function_calls :: (block : *Code_Block, code : Code, flags : For_Flags) #expand
 		case .PUSH_CONTEXT;
 		case .DIRECTIVE_LIBRARY;
 		case .DIRECTIVE_BYTES;
+		case .USING;
 
 		}
 	}
@@ -242,10 +384,7 @@ function_calls :: (block : *Code_Block, code : Code, flags : For_Flags) #expand
 
 
 
-
-
-
-
 #import "Compiler";
 #import "Basic";
 #import "Hash_Table";
+#import "String";
