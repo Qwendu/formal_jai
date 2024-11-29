@@ -118,108 +118,83 @@ condition_transform :: (variable_store_before : *Table(*Code_Declaration, Bool_V
 
 abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declaration)
 {
-
-	// rewrite this using build CFG
-	Store :: Table(*Code_Declaration, Bool_Value_Abstract_Domain);
-	stores_per_block : Table(*Code_Block, struct {stores : [] Store; parent : *Code_Block;});
-	for :#bake_arguments(node_iter(example_node = Code_Block.{})) block
+	CFG :: struct
 	{
-		stores := NewArray(it.statements.count + 1, Store);
-		for * stores 
-		{
-			init(it);
-			for var : variables_to_track  table_add(it, var, .BOT);
+		Edge :: struct
+		{// not good for if a == { case ...;} but like for now its okay
+			condition : *Code_Node;
+			condition_true : *CFG;
+			condition_false : *CFG;
 		}
-	
-		table_add(*stores_per_block, it, .{stores, stack_element.surrounding_block});
-		log("New Block %, child of %", it, stack_element.surrounding_block);
+		parents : [] *CFG;
+		children : Edge;
+		statements : [] *Code_Node;
 	}
-	
-	for it, blk: stores_per_block
-	{
-		log("Block % has % statements", blk, blk.statements.count);
-		log("has % stores", it.stores.count);
-		for statement, statement_index : blk.statements
-		{
-			log("Store %", *it.stores[statement_index]);
-			for val, var : it.stores[statement_index]  log("% -> %", var, val);
-		}
-	}
-	
-	queue : [..] struct
-	{
-		block     : *Code_Block;
-		statement : int;
-	};
-	array_add(*queue, .{block, 0});
-	while queue.count > 0
-	{
-		current := pop(*queue);
-		block_info := table_find_pointer(*stores_per_block, current.block);
-		block_stores := block_info.stores;
-		node := current.block.statements[current.statement];
-		state_before := *(block_stores[current.statement + 0]);
 
-		if node.kind == 
+	build_cfg :: (origin : *Code_Block) -> [] *CFG
+	{
+		all :[..] * CFG;
+		blocks_to_visit : [..] struct {
+			block : *Code_Block;
+			cfg   : *CFG;
+		};
+		array_add(*blocks_to_visit, .{origin, New(CFG)});
+		while blocks_to_visit.count > 0
 		{
-		case .IF;
-			node_if := cast(*Code_If)node;
-			//compiler_report("IF", make_location(node), .INFO);
-			then_block_stores := table_find_pointer(*stores_per_block, node_if.then_block);
-			else_block_stores := table_find_pointer(*stores_per_block, node_if.else_block);
-			if then_block_stores && condition_transform(state_before, node_if.condition, *(then_block_stores.stores[0]))
+			using _ := pop(*blocks_to_visit);
+			assert(block != null);
+			assert(cfg != null);
+			start_index := 0;
+			//compiler_report("Visiting Block", make_location(block), .INFO);
+			for stmt, stmt_index : block.statements
 			{
-				array_add(*queue, .{node_if.then_block, 0});
-				//compiler_report("adding to queue", make_location(node), .INFO);
-			}
-			if else_block_stores && condition_transform(state_before, node_if.condition, *(else_block_stores.stores[0]))
-			{
-				array_add(*queue, .{node_if.else_block, 0});
-				//compiler_report("adding to queue", make_location(node), .INFO);
-			}
-		case;
-			state_after  := *(block_stores[current.statement + 1]);
-			//compiler_report("statement_transform", make_location(node), .INFO);
-			changed := statement_transform(state_before, node, state_after);
-			if changed
-			{
-				next_index := current.statement + 1;
-				if next_index < current.block.statements.count
+				//compiler_report(tprint("Visiting Statement for cfg %", cfg), make_location(stmt), .INFO);
+				if stmt.kind ==
 				{
+				case .IF;
+					node_if := cast(*Code_If)stmt;
+					cfg.statements = array_view(block.statements, start_index, stmt_index);
+					cfg.children.condition = node_if.condition;
 					
-					next := current.block.statements[next_index];
-					//compiler_report("adding statement to queue", make_location(next), .INFO);
-					array_add(*queue, .{current.block, next_index});
-				}else{
-					//compiler_report("at the end of a block", make_location(node), .INFO);
-					if current.block != block
+					after_if := New(CFG);
+					after_if.parents = NewArray(2, *CFG);
+					n_used := 0;
+					if node_if.then_block
 					{
-						parent := block_info.parent;
-						compiler_report(tprint("% is parent", current.block.parent), make_location(current.block), .INFO);
-						
-						assert(parent != null);
-						index_of_owning := parent.statements.count;
-						for stmt, stmt_index : parent.statements 
-						{
-							compiler_report(tprint("index % %", stmt_index,stmt), make_location(stmt), .INFO);
-							if stmt == current.block.owning_statement 
-							{
-
-								index_of_owning = stmt_index;
-								break;
-							}
-						}
-						assert(0 <= index_of_owning  && index_of_owning < parent.statements.count);
-
-						next_in_parent := index_of_owning + 1;
-						if next_in_parent < parent.statements.count
-						{
-							array_add(*queue, .{parent, index_of_owning + 1});
-						}
-						// TODO: Merge the states
+						cfg.children.condition_true = New(CFG);
+						cfg.children.condition_true.parents = NewArray(1, *CFG);
+						cfg.children.condition_true.parents[0] = cfg;
+						array_add(*blocks_to_visit, .{node_if.then_block, cfg.children.condition_true});
+						after_if.parents[n_used] = cfg.children.condition_true;
+						n_used += 1;
 					}
+					if node_if.else_block
+					{
+						cfg.children.condition_false = New(CFG);
+						cfg.children.condition_false.parents = NewArray(1, *CFG);
+						cfg.children.condition_false.parents[0] = cfg;
+						array_add(*blocks_to_visit, .{node_if.else_block, cfg.children.condition_false});
+						after_if.parents[n_used] = cfg.children.condition_false;
+						n_used += 1;
+					}
+					after_if.parents.count = n_used;
+					start_index = stmt_index + 1;
+					array_add(*all, cfg);
+					cfg = after_if;
+				case;
 				}
 			}
+			cfg.statements = array_view(block.statements, start_index,block.statements.count);
+			array_add(*all, cfg);
+		}
+		return all;
+	}
+	cfg := build_cfg(block);
+	for cfg
+	{
+		for stmt, stmt_index : it.statements
+		{
+			compiler_report(tprint("CFG %:%", it, stmt_index), make_location(stmt), .INFO);
 		}
 	}
 }
@@ -296,7 +271,7 @@ node_iter :: (block : *Code_Block, code : Code, flags : For_Flags, $example_node
 	{
 		stack_element = pop(*stack);
 		node := stack_element.node;
-		if node.kind == example_node.kind
+		if node.kind == example_node.kind || type_of(example_node) == Code_Node
 		{
 			defer it_index += 1;
 			it = cast(*type_of(example_node))node;
