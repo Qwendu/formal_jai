@@ -130,9 +130,9 @@ abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declar
 			init(it);
 			for var : variables_to_track  table_add(it, var, .BOT);
 		}
-
+	
 		table_add(*stores_per_block, it, .{stores, stack_element.surrounding_block});
-		log("New Block %", it);
+		log("New Block %, child of %", it, stack_element.surrounding_block);
 	}
 	
 	for it, blk: stores_per_block
@@ -164,22 +164,22 @@ abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declar
 		{
 		case .IF;
 			node_if := cast(*Code_If)node;
-			compiler_report("IF", make_location(node), .INFO);
+			//compiler_report("IF", make_location(node), .INFO);
 			then_block_stores := table_find_pointer(*stores_per_block, node_if.then_block);
 			else_block_stores := table_find_pointer(*stores_per_block, node_if.else_block);
 			if then_block_stores && condition_transform(state_before, node_if.condition, *(then_block_stores.stores[0]))
 			{
 				array_add(*queue, .{node_if.then_block, 0});
-				compiler_report("adding to queue", make_location(node), .INFO);
+				//compiler_report("adding to queue", make_location(node), .INFO);
 			}
 			if else_block_stores && condition_transform(state_before, node_if.condition, *(else_block_stores.stores[0]))
 			{
 				array_add(*queue, .{node_if.else_block, 0});
-				compiler_report("adding to queue", make_location(node), .INFO);
+				//compiler_report("adding to queue", make_location(node), .INFO);
 			}
 		case;
 			state_after  := *(block_stores[current.statement + 1]);
-			compiler_report("statement_transform", make_location(node), .INFO);
+			//compiler_report("statement_transform", make_location(node), .INFO);
 			changed := statement_transform(state_before, node, state_after);
 			if changed
 			{
@@ -191,17 +191,23 @@ abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declar
 					//compiler_report("adding statement to queue", make_location(next), .INFO);
 					array_add(*queue, .{current.block, next_index});
 				}else{
-					compiler_report("at the end of a block", make_location(node), .INFO);
+					//compiler_report("at the end of a block", make_location(node), .INFO);
 					if current.block != block
 					{
 						parent := block_info.parent;
-						//compiler_report("Parent of ", make_location(current.block), .INFO);
+						compiler_report(tprint("% is parent", current.block.parent), make_location(current.block), .INFO);
+						
 						assert(parent != null);
 						index_of_owning := parent.statements.count;
-						for stmt, stmt_index : parent.statements  if stmt == current.block.owning_statement 
+						for stmt, stmt_index : parent.statements 
 						{
-							index_of_owning = stmt_index;
-							break;
+							compiler_report(tprint("index % %", stmt_index,stmt), make_location(stmt), .INFO);
+							if stmt == current.block.owning_statement 
+							{
+
+								index_of_owning = stmt_index;
+								break;
+							}
 						}
 						assert(0 <= index_of_owning  && index_of_owning < parent.statements.count);
 
@@ -259,7 +265,7 @@ get_procedure_header_if_compile_time_known :: (call : *Code_Procedure_Call) -> *
 get_procedure_type :: (call : *Code_Procedure_Call) -> *Code_Procedure_Header
 {
 	id := call.procedure_expression;
-	compiler_report(tprint("Procedure does not resolve type is %", type_signature(id.type)), make_location(call), .ERROR);
+	//compiler_report(tprint("Procedure does not resolve type is %", type_signature(id.type)), make_location(call), .ERROR);
 	return null;
 }
 
