@@ -73,7 +73,7 @@ _message :: (p : *Metaprogram_Plugin, m : *Message)
 }
 
 
-Bool_Value_Abstract_Domain :: enum
+Bool_Value :: enum
 {
 	BOT   :: 0x00;
 	TRUE  :: 0x01;
@@ -81,36 +81,41 @@ Bool_Value_Abstract_Domain :: enum
 	TOP   :: 0x03;
 };
 
-join :: (a : Bool_Value_Abstract_Domain, b : Bool_Value_Abstract_Domain) -> Bool_Value_Abstract_Domain
+join :: (a : Bool_Value, b : Bool_Value) -> Bool_Value
 {
 	r := a & b;
 	return r;
 }
 
-meet :: (a : Bool_Value_Abstract_Domain, b : Bool_Value_Abstract_Domain) -> Bool_Value_Abstract_Domain
+meet :: (a : Bool_Value, b : Bool_Value) -> Bool_Value
 {
 	r := a | b;
 	return r;
 }
 
 #if false #run {
-	for a : enum_values_as_enum(Bool_Value_Abstract_Domain)
+	for a : enum_values_as_enum(Bool_Value)
 	{
-		for b : enum_values_as_enum(Bool_Value_Abstract_Domain)
+		for b : enum_values_as_enum(Bool_Value)
 		{
 			log("meet(%1,%2) = %3 join(%1,%2) = %4", a,b, meet(a,b), join(a,b));
 		}
 	}
 }
 
-statement_transform :: (variable_store_before : *Table(*Code_Declaration, Bool_Value_Abstract_Domain), statement : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
+statement_transform :: (variable_store_before : *Table(*Code_Scope_Entry, Bool_Value), statement : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
 {
 	// What effects statement has on the variables in store
+	if statements.kind ==
+	{
+	case .DECLARATION;
+	case;
+	}
 	return true;
 }
 
 
-condition_transform :: (variable_store_before : *Table(*Code_Declaration, Bool_Value_Abstract_Domain), condition : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
+condition_transform :: (variable_store_before : *Table(*Code_Scope_Entry, Bool_Value), condition : *Code_Node, variable_store_after : type_of(variable_store_before)) -> (changed : bool)
 {
 	return true;
 }
@@ -158,30 +163,39 @@ abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declar
 					
 					after_if := New(CFG);
 					after_if.parents = NewArray(2, *CFG);
-					n_used := 0;
 					if node_if.then_block
 					{
-						cfg.children.condition_true = New(CFG);
-						cfg.children.condition_true.parents = NewArray(1, *CFG);
-						cfg.children.condition_true.parents[0] = cfg;
+						child := New(CFG);
+						cfg.children.condition_true = child;
+						child.parents = NewArray(1, *CFG);
+						child.parents[0] = cfg;
 						array_add(*blocks_to_visit, .{node_if.then_block, cfg.children.condition_true});
-						after_if.parents[n_used] = cfg.children.condition_true;
-						n_used += 1;
+						after_if.parents[0] = cfg.children.condition_true;
+						child.children.condition_true = after_if;
 					}
 					if node_if.else_block
 					{
-						cfg.children.condition_false = New(CFG);
-						cfg.children.condition_false.parents = NewArray(1, *CFG);
-						cfg.children.condition_false.parents[0] = cfg;
-						array_add(*blocks_to_visit, .{node_if.else_block, cfg.children.condition_false});
-						after_if.parents[n_used] = cfg.children.condition_false;
-						n_used += 1;
+						child := New(CFG);
+
+						child.parents = NewArray(1, *CFG);
+						child.parents[0] = cfg;
+						array_add(*blocks_to_visit, .{node_if.else_block, child});
+						cfg.children.condition_false = child;
+						child.children.condition_true = after_if;
+						after_if.parents[1] = child;
+					}else{
+						cfg.children.condition_false = after_if;
+						after_if.parents[1] = cfg;
 					}
-					after_if.parents.count = n_used;
 					start_index = stmt_index + 1;
 					array_add(*all, cfg);
 					cfg = after_if;
+				case .DECLARATION;
+				case .BINARY_OPERATOR;
+				case .PROCEDURE_CALL;
+				case .COMPOUND_DECLARATION;
 				case;
+					compiler_report("Unsupported Statement in CFG generation", make_location(stmt), .ERROR);
 				}
 			}
 			cfg.statements = array_view(block.statements, start_index,block.statements.count);
@@ -189,12 +203,81 @@ abstract_interpret :: (block : *Code_Block, variables_to_track : [] *Code_Declar
 		}
 		return all;
 	}
+
+
+
 	cfg := build_cfg(block);
+	Store :: Table(*Code_Scope_Entry, Bool_Value);
+
+	print_store :: (store : *Store)
+	{
+		log("Store %", store);
+		for val, var : store
+		{
+			log("% -> %", var.name, val);
+			//compiler_report(tprint("Store %: %", store, val), make_location(var), .INFO);
+		}
+	}
+
+	stores_per_cfg : Table(*CFG, [] Store);
 	for cfg
 	{
-		for stmt, stmt_index : it.statements
+		stores_per_line := NewArray(it.statements.count + 1, Store);
+		for * store : stores_per_line
 		{
-			compiler_report(tprint("CFG %:%", it, stmt_index), make_location(stmt), .INFO);
+			for var, var_index : variables_to_track
+			{
+				table_add(store, *var.entry, .BOT);
+			}
+		}
+		table_add(*stores_per_cfg, it, stores_per_line);
+	}
+	
+	work_list : [..] struct { cfg : *CFG; stmt_index : int;};
+	array_add(*work_list, .{cfg[0], 0});
+	while work_list.count > 0
+	{
+		el := pop(*work_list);
+		compiler_report("Working on", make_location(el.cfg.statements[el.stmt_index]), .INFO);
+		next_index := el.stmt_index + 1;
+		stores := table_find_pointer(*stores_per_cfg, el.cfg);
+		assert(stores != null);
+		store_before_statement := *stores.*[el.stmt_index];
+		store_after_statement  := *stores.*[next_index];
+		print_store(store_before_statement);
+if statement_transform(store_before_statement, el.cfg.statements[el.stmt_index], store_after_statement)
+		{
+			if next_index < el.cfg.statements.count
+			{
+				array_add(*work_list, .{el.cfg, next_index});
+			}else{
+				{
+					next_block := el.cfg.children.condition_true;
+					stores_next_block := table_find_pointer(*stores_per_cfg, next_block);
+					if(stores_next_block != null)
+					{
+						cond := el.cfg.children.condition;
+						if condition_transform(store_after_statement, cond, *stores_next_block.*[0])
+						{
+							array_add(*work_list, .{next_block, 0});
+						}
+					}
+				}
+				{
+					next_block := el.cfg.children.condition_false;
+					stores_next_block := table_find_pointer(*stores_per_cfg, next_block);
+					if(stores_next_block != null)
+					{
+						cond : Code_Unary_Operator;
+						cond.operator_type = #char "!";
+						cond.subexpression = el.cfg.children.condition;
+						if condition_transform(store_after_statement, *cond, *stores_next_block.*[0])
+						{
+							array_add(*work_list, .{next_block, 0});
+						}
+					}
+				}
+			}
 		}
 	}
 }
