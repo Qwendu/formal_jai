@@ -8,7 +8,7 @@ Vibes :: enum_flags
 }
 
 
-require :: (requirement : Vibes, procedure : $T)
+require :: ($requirement : Vibes, procedure : $T)
 #modify 
 {
 	// :require_checks_for_proc:
@@ -83,14 +83,27 @@ check_body_for_require_constraints :: (vc : *Vibe_Checker, body : *Code_Procedur
 			continue; 
 		}
 		
+	
+		property : Vibes = 0;
 		requirement     := call.arguments_sorted[0];
-		success, property := try_evaluate_to(requirement, Vibes);
-		if !success
+		assert(called_procedure.constants_block != null);
+		assert(called_procedure.constants_block.block_type == .CONSTANTS);
+		for called_procedure.constants_block.members  if it.kind == .DECLARATION
 		{
-			compiler_report(sprint("Expected a literal of Type % but got %", Vibes , get_type(requirement.type)), make_location(requirement), .ERROR);
+			decl := cast(*Code_Declaration, it);
+			if decl.name == "requirement"
+			{
+				assert(decl.expression.kind == .LITERAL);
+				property = cast(Vibes, cast(*Code_Literal,decl.expression).values._u64);
+			}
+		}
+		if property == 0
+		{
+			compiler_report("No property to check give (evaluated to 0)", make_location(it));
 			continue;
 		}
-		target_function := call.arguments_sorted[1];
+		
+		target_function := call.arguments_sorted[0];
 		if target_function.kind != .IDENT
 		{
 			compiler_report(sprint("Expected an identifier pointing to a function but got %", target_function.kind), make_location(target_function), .ERROR);
@@ -142,6 +155,12 @@ check_function_for_property :: (property : Vibes, header : *Code_Procedure_Heade
 			}
 			return is_okay;
 		}
+		//
+		// @TODO
+		// asserting here is not good because the procedure body might
+		//  not have been typechecked despite everything calling it having
+		//  been typechecked.
+		//  we would error there. Fix this.
 		assert(body != null, "The body of Procedure % was null", header.name);
 	}
 
@@ -188,75 +207,4 @@ check_function_for_property :: (property : Vibes, header : *Code_Procedure_Heade
 	}
 	pop(stack_of_functions);
 	return true;
-}
-
-
-try_evaluate_to :: (node : *Code_Node, $T : Type) -> success : bool, value : T
-{
-	value : T;
-
-	if node.type.type != .ENUM  
-	{
-		compiler_report("Type of the node is not an enum", make_location(node), .ERROR);
-		return false, value;
-	}
-
-
-	t_enum := cast(*Type_Info_Enum, node.type);
-	if t_enum.name != "Vibes" 
-	{
-		compiler_report("Name of Enum is not correct", make_location(node), .ERROR);
-		return false, value;
-	}
-
-	if node.kind == 
-	{
-	case .BINARY_OPERATOR;
-		binop := cast(*Code_Binary_Operator, node);
-		left_succ, left_val := try_evaluate_to(binop.left, T);
-		right_succ, right_val := try_evaluate_to(binop.right, T);
-
-		if !left_succ || !right_succ  return false, value;
-
-		if binop.operator_type ==
-		{
-		case #char "|";
-			return true, left_val | right_val;
-		}
-	
-	case .UNARY_OPERATOR;
-		unop := cast(*Code_Unary_Operator, node);
-
-		succ, val := try_evaluate_to(unop.subexpression, T);
-
-		if !succ return false, val;
-		if unop.operator_type ==
-		{
-		case #char ".";
-			return true, val;
-		case #char "~";
-			return true, ~val;
-		case;
-			return false, val;
-		}
-	
-	case .IDENT;
-		ident := cast(*Code_Ident, node);
-		#insert #run  -> string
-		{
-			b : String_Builder;
-			builder := *b;
-			for enum_names(Vibes)
-			{
-				print(builder, "if ident.name == \"%\"  return true, .%1;\n", it);
-			}
-			return builder_to_string(builder);
-		};
-		compiler_report(tprint("Failed to match % with any value in %", ident.name, Vibes), make_location(ident));
-	case;
-		compiler_report("Unsupported", make_location(node));
-	}
-
-
-	return false, value;
 }
