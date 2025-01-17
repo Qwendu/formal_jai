@@ -136,7 +136,6 @@ check_function_for_property :: (property : Vibes, header : *Code_Procedure_Heade
 			// 
 			is_okay := true;
 			if property & .DOES_NOT_ACCESS_GLOBALS  is_okay ||= true;
-			if property & .SIDE_EFFECT_FREE         is_okay ||= true;
 			if !is_okay 
 			{
 				compiler_report(tprint("intrinsic % does not pass the vibe check %", header.name, property), make_location(header), .INFO);
@@ -176,7 +175,6 @@ check_function_for_property :: (property : Vibes, header : *Code_Procedure_Heade
 		{
 			if property & .GLOBAL_CONSTANTS_ARE_FINE && decl_of_id.flags & (.IS_CONSTANT | .IS_GLOBAL)
 			{
-				log("Is constant global");
 			} else if decl_of_id.flags & .IS_GLOBAL
 			{
 				compiler_report(tprint("GLOBAL spotted %", it), make_location(it), .INFO);

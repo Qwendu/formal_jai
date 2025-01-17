@@ -37,6 +37,7 @@ main :: ()
 	//VC.require(.DOES_NOT_ACCESS_GLOBALS, assignment_from_global);
 	//VC.require(.DOES_NOT_ACCESS_GLOBALS | .GLOBAL_CONSTANTS_ARE_FINE, assignment_from_global);
 	VC.require(.DOES_NOT_ACCESS_GLOBALS | .GLOBAL_CONSTANTS_ARE_FINE, assignment_from_global_constant);
+	//VC.require(.DOES_NOT_ACCESS_GLOBALS, using_a_global_in_transitive_calls);
 	VC.require(.DOES_NOT_ACCESS_GLOBALS | .GLOBAL_CONSTANTS_ARE_FINE , using_a_global_in_transitive_calls);
 
 
