@@ -8,5 +8,8 @@ Implement simple static checks like:
 - procedure does not access non constant globals
 
 ## Examples
-To run the examples symlink the contents of this directory either into your ``jai/modules`` or
-into the ``e<example you want to run>/modules`` directory.
+To run the examples do
+```
+cd <example_dir>
+jai main.jai -import_dir <path/to/formal_jai> -plug <Plugin you want to test>
+```
